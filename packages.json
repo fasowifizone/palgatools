@@ -2,7 +2,7 @@
   "name": "palga-tools-backend",
   "version": "1.0.0",
   "description": "PALGA TOOLS Backend Server",
-  "main": "server.js",
+  "main": "app.js",
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js"
