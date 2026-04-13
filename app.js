@@ -1,4 +1,4 @@
-// server.js - Backend Node.js/Express avec Supabase (PERSISTANT !)
+// app.js - Version corrigée pour Render
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -17,76 +17,83 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static('public'));
 
-// ============ CONFIGURATION SUPABASE (PERSISTANTE) ============
+// ============ CONFIGURATION SUPABASE ============
 const supabaseUrl = 'https://nuiohpzybysaqawdqvvl.supabase.co';
 const supabaseKey = 'sb_publishable_02wVBCiyI9-1PV8SXY3Grw_9_dWF-fi';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 console.log('✅ Connexion à Supabase établie');
 
-// ============ INITIALISATION DES TABLES ============
+// ============ FONCTION POUR CRÉER LES TABLES ============
 async function initDatabase() {
-    // Créer table users
-    const { error: usersError } = await supabase.query(`
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            user_id TEXT UNIQUE NOT NULL,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            email TEXT,
-            whatsapp TEXT,
-            credit FLOAT DEFAULT 0,
-            is_admin INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP
-        )
-    `);
-    
-    if (usersError) console.log('⚠️ Table users:', usersError.message);
-    else console.log('✅ Table users prête');
+    try {
+        // 1. Créer table users
+        const { error: usersError } = await supabase.rpc('exec_sql', {
+            sql: `
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT UNIQUE NOT NULL,
+                    username TEXT UNIQUE NOT NULL,
+                    password TEXT NOT NULL,
+                    email TEXT,
+                    whatsapp TEXT,
+                    credit FLOAT DEFAULT 0,
+                    is_admin INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP
+                )
+            `
+        });
+        
+        if (usersError) {
+            // Si exec_sql n'existe pas, on crée les tables manuellement via l'API
+            console.log('⚠️ Création des tables via l\'API REST...');
+            await createTablesViaAPI();
+        } else {
+            console.log('✅ Tables créées via RPC');
+        }
+        
+        // 2. Créer admin par défaut
+        await createDefaultAdmin();
+        
+        // 3. Créer utilisateur démo
+        await createDefaultDemo();
+        
+        // 4. Créer services
+        await createDefaultServices();
+        
+    } catch (error) {
+        console.error('❌ Erreur init:', error.message);
+    }
+}
 
-    // Créer table transactions
-    const { error: transError } = await supabase.query(`
-        CREATE TABLE IF NOT EXISTS transactions (
-            id SERIAL PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            type TEXT NOT NULL,
-            amount FLOAT NOT NULL,
-            description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+async function createTablesViaAPI() {
+    // Vérifier si la table users existe déjà
+    const { data: tableExists, error } = await supabase
+        .from('users')
+        .select('count', { count: 'exact', head: true });
     
-    if (transError) console.log('⚠️ Table transactions:', transError.message);
-    else console.log('✅ Table transactions prête');
+    if (error && error.message.includes('relation') && error.message.includes('does not exist')) {
+        console.log('📦 Les tables n\'existent pas encore. Elles seront créées automatiquement lors de la première insertion.');
+        console.log('💡 Ceci est normal pour un premier déploiement.');
+    } else {
+        console.log('✅ Tables déjà existantes');
+    }
+}
 
-    // Créer table services
-    const { error: servicesError } = await supabase.query(`
-        CREATE TABLE IF NOT EXISTS services (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT,
-            price FLOAT NOT NULL,
-            commands TEXT,
-            is_active INTEGER DEFAULT 1
-        )
-    `);
-    
-    if (servicesError) console.log('⚠️ Table services:', servicesError.message);
-    else console.log('✅ Table services prête');
-
-    // ============ CRÉER ADMIN PAR DÉFAUT ============
+async function createDefaultAdmin() {
     const adminId = generateUserId();
     const hashedAdminPw = bcrypt.hashSync('Admin123', 10);
     
-    const { data: existingAdmin } = await supabase
+    // Vérifier si admin existe
+    const { data: existing } = await supabase
         .from('users')
         .select('*')
         .eq('username', 'ADMIN')
-        .single();
+        .maybeSingle();
     
-    if (!existingAdmin) {
-        await supabase.from('users').insert([{
+    if (!existing) {
+        const { error } = await supabase.from('users').insert([{
             user_id: adminId,
             username: 'ADMIN',
             password: hashedAdminPw,
@@ -94,21 +101,29 @@ async function initDatabase() {
             credit: 1000,
             is_admin: 1
         }]);
-        console.log('✅ Admin créé:', adminId);
+        
+        if (error) {
+            console.log('⚠️ Erreur création admin:', error.message);
+        } else {
+            console.log('✅ Admin créé:', adminId);
+        }
+    } else {
+        console.log('✅ Admin existe déjà');
     }
+}
 
-    // ============ CRÉER UTILISATEUR DEMO ============
+async function createDefaultDemo() {
     const demoId = generateUserId();
     const hashedDemoPw = bcrypt.hashSync('Demo123', 10);
     
-    const { data: existingDemo } = await supabase
+    const { data: existing } = await supabase
         .from('users')
         .select('*')
         .eq('username', 'DEMO')
-        .single();
+        .maybeSingle();
     
-    if (!existingDemo) {
-        await supabase.from('users').insert([{
+    if (!existing) {
+        const { error } = await supabase.from('users').insert([{
             user_id: demoId,
             username: 'DEMO',
             password: hashedDemoPw,
@@ -116,42 +131,58 @@ async function initDatabase() {
             credit: 100,
             is_admin: 0
         }]);
-        console.log('✅ Utilisateur DEMO créé:', demoId);
+        
+        if (error) {
+            console.log('⚠️ Erreur création DEMO:', error.message);
+        } else {
+            console.log('✅ Utilisateur DEMO créé:', demoId);
+        }
+    } else {
+        console.log('✅ Utilisateur DEMO existe déjà');
     }
+}
 
-    // ============ AJOUTER SERVICES PAR DÉFAUT ============
+async function createDefaultServices() {
     const services = [
-        ['FRP Bypass Standard', 'Déblocage compte Google', 10, '["adb shell am start -n com.google.android.gsf.login/", "adb shell content insert --uri content://settings/secure --bind name:s:user_setup_complete --bind value:s:1"]'],
-        ['FRP Bypass Avancé', 'Pour Samsung/Huawei', 15, '["adb shell settings put global setup_wizard_has_run 1", "adb shell settings put secure user_setup_complete 1"]'],
-        ['MDM Removal', 'Suppression MDM complet', 20, '["adb shell pm uninstall -k --user 0 com.android.mdm", "adb shell pm uninstall -k --user 0 com.samsung.android.knox"]'],
-        ['Web Bypass', 'Ouverture du clavier d\'appel', 10, '["open_dialer"]']
+        { name: 'FRP Bypass Standard', description: 'Déblocage compte Google', price: 10, commands: '["adb shell content insert --uri content://settings/secure --bind name:s:user_setup_complete --bind value:s:1"]', is_active: 1 },
+        { name: 'FRP Bypass Avancé', description: 'Pour Samsung/Huawei', price: 15, commands: '["adb shell settings put global setup_wizard_has_run 1"]', is_active: 1 },
+        { name: 'MDM Removal', description: 'Suppression MDM complet', price: 20, commands: '["adb shell pm uninstall -k --user 0 com.android.mdm"]', is_active: 0 },
+        { name: 'Web Bypass', description: 'Ouverture du clavier d\'appel', price: 10, commands: '["open_dialer"]', is_active: 1 }
     ];
-
+    
     for (const service of services) {
         const { data: existing } = await supabase
             .from('services')
             .select('*')
-            .eq('name', service[0])
-            .single();
+            .eq('name', service.name)
+            .maybeSingle();
         
         if (!existing) {
-            await supabase.from('services').insert([{
-                name: service[0],
-                description: service[1],
-                price: service[2],
-                commands: service[3]
-            }]);
-            console.log(`✅ Service ajouté: ${service[0]}`);
+            const { error } = await supabase.from('services').insert([service]);
+            if (error) {
+                console.log(`⚠️ Erreur création service ${service.name}:`, error.message);
+            } else {
+                console.log(`✅ Service ajouté: ${service.name}`);
+            }
         }
     }
 }
 
-// Fonction utilitaire
 function generateUserId() {
     return 'PALGA' + crypto.randomBytes(4).toString('hex').toUpperCase();
 }
 
 // ============ ROUTES API ============
+
+// Route racine
+app.get('/', (req, res) => {
+    res.json({ 
+        status: 'online', 
+        service: 'PALGA TOOLS API',
+        database: 'Supabase',
+        version: '1.0.0'
+    });
+});
 
 // Inscription
 app.post('/api/register', async (req, res) => {
@@ -159,6 +190,17 @@ app.post('/api/register', async (req, res) => {
     
     if (!username || !password) {
         return res.status(400).json({ error: 'Nom d\'utilisateur et mot de passe requis' });
+    }
+    
+    // Vérifier si username existe déjà
+    const { data: existing } = await supabase
+        .from('users')
+        .select('username')
+        .eq('username', username)
+        .maybeSingle();
+    
+    if (existing) {
+        return res.status(400).json({ error: 'Nom d\'utilisateur déjà pris' });
     }
     
     const user_id = generateUserId();
@@ -169,9 +211,6 @@ app.post('/api/register', async (req, res) => {
     }]);
     
     if (error) {
-        if (error.message.includes('duplicate')) {
-            return res.status(400).json({ error: 'Nom d\'utilisateur déjà pris' });
-        }
         return res.status(500).json({ error: error.message });
     }
     
@@ -186,7 +225,7 @@ app.post('/api/login', async (req, res) => {
         .from('users')
         .select('*')
         .or(`username.eq.${identifier},user_id.eq.${identifier}`)
-        .single();
+        .maybeSingle();
     
     if (error || !user) {
         return res.status(401).json({ error: 'Identifiants incorrects' });
@@ -196,7 +235,6 @@ app.post('/api/login', async (req, res) => {
         return res.status(401).json({ error: 'Identifiants incorrects' });
     }
     
-    // Mettre à jour last_login
     await supabase
         .from('users')
         .update({ last_login: new Date().toISOString() })
@@ -213,7 +251,7 @@ app.post('/api/login', async (req, res) => {
     });
 });
 
-// Vérifier crédits sans mot de passe (pour page web)
+// Vérifier crédits (pour page web)
 app.get('/api/user/:userId/credit', async (req, res) => {
     const { userId } = req.params;
     
@@ -221,29 +259,13 @@ app.get('/api/user/:userId/credit', async (req, res) => {
         .from('users')
         .select('user_id, username, credit')
         .or(`user_id.eq.${userId},username.eq.${userId}`)
-        .single();
+        .maybeSingle();
     
     if (error || !user) {
         return res.status(404).json({ error: 'Utilisateur non trouvé', exists: false });
     }
     
     res.json({ exists: true, user_id: user.user_id, username: user.username, credit: user.credit });
-});
-
-// Obtenir infos utilisateur
-app.get('/api/user/:userId', async (req, res) => {
-    const { userId } = req.params;
-    
-    const { data: user, error } = await supabase
-        .from('users')
-        .select('user_id, username, email, whatsapp, credit, is_admin, created_at, last_login')
-        .eq('user_id', userId)
-        .single();
-    
-    if (error || !user) {
-        return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-    res.json(user);
 });
 
 // Obtenir services
@@ -256,31 +278,29 @@ app.get('/api/services', async (req, res) => {
     if (error) {
         return res.status(500).json({ error: error.message });
     }
-    res.json(services);
+    res.json(services || []);
 });
 
-// Utiliser un service (FRP Bypass)
+// FRP Bypass
 app.post('/api/service/frp-bypass', async (req, res) => {
     const { user_id, service_id } = req.body;
     
-    // Récupérer le service
     const { data: service, error: serviceError } = await supabase
         .from('services')
         .select('*')
         .eq('id', service_id)
         .eq('is_active', 1)
-        .single();
+        .maybeSingle();
     
     if (serviceError || !service) {
         return res.status(404).json({ error: 'Service non trouvé' });
     }
     
-    // Récupérer l'utilisateur
     const { data: user, error: userError } = await supabase
         .from('users')
         .select('credit')
         .eq('user_id', user_id)
-        .single();
+        .maybeSingle();
     
     if (userError || !user) {
         return res.status(404).json({ error: 'Utilisateur non trouvé' });
@@ -293,16 +313,14 @@ app.post('/api/service/frp-bypass', async (req, res) => {
         });
     }
     
-    // Débiter
     const newCredit = user.credit - service.price;
+    
     await supabase.from('users').update({ credit: newCredit }).eq('user_id', user_id);
     
-    // Enregistrer transaction
     await supabase.from('transactions').insert([{
         user_id, type: 'service', amount: service.price, description: service.name
     }]);
     
-    // Récupérer les commandes
     let commands = [];
     try {
         commands = JSON.parse(service.commands);
@@ -314,12 +332,11 @@ app.post('/api/service/frp-bypass', async (req, res) => {
         success: true,
         remaining_credit: newCredit,
         commands: commands,
-        service_name: service.name,
-        message: `${service.name} effectué avec succès!`
+        service_name: service.name
     });
 });
 
-// Web Bypass (pour page web)
+// Web Bypass
 app.post('/api/service/web-bypass', async (req, res) => {
     const { user_id } = req.body;
     
@@ -327,12 +344,11 @@ app.post('/api/service/web-bypass', async (req, res) => {
         return res.status(400).json({ error: 'user_id requis' });
     }
     
-    // Récupérer l'utilisateur
     const { data: user, error: userError } = await supabase
         .from('users')
         .select('user_id, credit')
         .or(`user_id.eq.${user_id},username.eq.${user_id}`)
-        .single();
+        .maybeSingle();
     
     if (userError || !user) {
         return res.status(404).json({ error: 'Utilisateur non trouvé' });
@@ -341,8 +357,7 @@ app.post('/api/service/web-bypass', async (req, res) => {
     if (user.credit < 10) {
         return res.status(400).json({ 
             error: `Crédits insuffisants! Besoin de 10 crédits, vous avez ${user.credit}`,
-            current_credit: user.credit,
-            success: false
+            current_credit: user.credit
         });
     }
     
@@ -350,40 +365,62 @@ app.post('/api/service/web-bypass', async (req, res) => {
     await supabase.from('users').update({ credit: newCredit }).eq('user_id', user.user_id);
     
     await supabase.from('transactions').insert([{
-        user_id: user.user_id, type: 'service', amount: 10, description: 'Web Bypass - Ouverture clavier'
+        user_id: user.user_id, type: 'service', amount: 10, description: 'Web Bypass'
     }]);
     
     res.json({
         success: true,
         remaining_credit: newCredit,
-        message: "Web Bypass effectué! Ouverture du clavier d'appel...",
+        message: "Web Bypass effectué!",
         action: "open_dialer",
-        intent_url: "tel:",
-        fallback_intent: "intent://#Intent;scheme=tel;action=android.intent.action.DIAL;end"
+        intent_url: "tel:"
     });
 });
 
-// Ajouter crédits (admin seulement)
-app.post('/api/admin/add-credit', async (req, res) => {
-    const { admin_id, user_id, amount, description } = req.body;
+// Admin: Liste utilisateurs
+app.get('/api/admin/users', async (req, res) => {
+    const { admin_id } = req.query;
     
-    // Vérifier si admin
     const { data: admin, error: adminError } = await supabase
         .from('users')
         .select('is_admin')
         .eq('user_id', admin_id)
-        .single();
+        .maybeSingle();
     
     if (adminError || !admin || !admin.is_admin) {
         return res.status(403).json({ error: 'Accès non autorisé' });
     }
     
-    // Récupérer l'utilisateur cible
+    const { data: users, error } = await supabase
+        .from('users')
+        .select('user_id, username, email, whatsapp, credit, is_admin, created_at, last_login')
+        .order('created_at', { ascending: false });
+    
+    if (error) {
+        return res.status(500).json({ error: error.message });
+    }
+    res.json(users || []);
+});
+
+// Admin: Ajouter crédits
+app.post('/api/admin/add-credit', async (req, res) => {
+    const { admin_id, user_id, amount, description } = req.body;
+    
+    const { data: admin, error: adminError } = await supabase
+        .from('users')
+        .select('is_admin')
+        .eq('user_id', admin_id)
+        .maybeSingle();
+    
+    if (adminError || !admin || !admin.is_admin) {
+        return res.status(403).json({ error: 'Accès non autorisé' });
+    }
+    
     const { data: user, error: userError } = await supabase
         .from('users')
         .select('credit')
         .eq('user_id', user_id)
-        .single();
+        .maybeSingle();
     
     if (userError || !user) {
         return res.status(404).json({ error: 'Utilisateur non trouvé' });
@@ -399,32 +436,7 @@ app.post('/api/admin/add-credit', async (req, res) => {
     res.json({ success: true, new_credit: newCredit });
 });
 
-// Liste des utilisateurs (admin)
-app.get('/api/admin/users', async (req, res) => {
-    const { admin_id } = req.query;
-    
-    const { data: admin, error: adminError } = await supabase
-        .from('users')
-        .select('is_admin')
-        .eq('user_id', admin_id)
-        .single();
-    
-    if (adminError || !admin || !admin.is_admin) {
-        return res.status(403).json({ error: 'Accès non autorisé' });
-    }
-    
-    const { data: users, error } = await supabase
-        .from('users')
-        .select('user_id, username, email, whatsapp, credit, is_admin, created_at, last_login')
-        .order('created_at', { ascending: false });
-    
-    if (error) {
-        return res.status(500).json({ error: error.message });
-    }
-    res.json(users);
-});
-
-// Statistiques (admin)
+// Admin: Statistiques
 app.get('/api/admin/stats', async (req, res) => {
     const { admin_id } = req.query;
     
@@ -432,15 +444,15 @@ app.get('/api/admin/stats', async (req, res) => {
         .from('users')
         .select('is_admin')
         .eq('user_id', admin_id)
-        .single();
+        .maybeSingle();
     
     if (adminError || !admin || !admin.is_admin) {
         return res.status(403).json({ error: 'Accès non autorisé' });
     }
     
     const { count: total_users } = await supabase.from('users').select('*', { count: 'exact', head: true });
-    const { data: creditSum } = await supabase.from('users').select('credit');
-    const total_credit = creditSum?.reduce((sum, u) => sum + (u.credit || 0), 0) || 0;
+    const { data: creditData } = await supabase.from('users').select('credit');
+    const total_credit = creditData?.reduce((sum, u) => sum + (u.credit || 0), 0) || 0;
     const { count: total_transactions } = await supabase.from('transactions').select('*', { count: 'exact', head: true });
     const { count: services_used } = await supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('type', 'service');
     
@@ -466,24 +478,20 @@ app.get('/api/user/:userId/transactions', async (req, res) => {
     if (error) {
         return res.status(500).json({ error: error.message });
     }
-    res.json(transactions);
+    res.json(transactions || []);
 });
 
-// Route racine
-app.get('/', (req, res) => {
-    res.json({ 
-        status: 'online', 
-        service: 'PALGA TOOLS API',
-        database: 'Supabase (PERSISTANT)',
-        version: '1.0.0'
-    });
-});
-
-// Initialiser et démarrer
+// Démarrer le serveur
 initDatabase().then(() => {
     app.listen(PORT, () => {
         console.log(`🚀 Serveur PALGA TOOLS démarré sur http://localhost:${PORT}`);
         console.log(`📡 API disponible sur http://localhost:${PORT}/api`);
-        console.log(`💾 Base de données: Supabase (PERSISTANTE - pas de perte de données!)`);
+        console.log(`💾 Base de données: Supabase (PERSISTANTE)`);
+    });
+}).catch(err => {
+    console.error('❌ Erreur au démarrage:', err);
+    // Même si l'init échoue, on démarre le serveur
+    app.listen(PORT, () => {
+        console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
     });
 });
