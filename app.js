@@ -89,13 +89,13 @@ async function createDefaultAdmin() {
     const { data: existing } = await supabase
         .from('users')
         .select('*')
-        .eq('username', 'ADMIN')
+        .eq('username', 'administrateur')
         .maybeSingle();
     
     if (!existing) {
         const { error } = await supabase.from('users').insert([{
             user_id: adminId,
-            username: 'ADMIN',
+            username: 'administrateur',
             password: hashedAdminPw,
             email: 'admin@palga.com',
             credit: 1000,
