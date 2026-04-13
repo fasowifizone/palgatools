@@ -1,4 +1,4 @@
-// server.js - Backend Node.js/Express
+// server.js - Backend Node.js/Express COMPLET ET CORRIGÉ
 const express = require('express');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
@@ -10,7 +10,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: '*', // Autorise toutes les origines pour le web
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use(express.static('public'));
 
@@ -79,17 +83,19 @@ db.serialize(() => {
         }
     });
 
-    // Ajouter services par défaut
+    // Ajouter services par défaut (AVEC WEB BYPASS)
     const services = [
         ['FRP Bypass Standard', 'Déblocage compte Google', 10, '["adb shell am start -n com.google.android.gsf.login/", "adb shell content insert --uri content://settings/secure --bind name:s:user_setup_complete --bind value:s:1"]'],
         ['FRP Bypass Avancé', 'Pour Samsung/Huawei', 15, '["adb shell settings put global setup_wizard_has_run 1", "adb shell settings put secure user_setup_complete 1"]'],
-        ['MDM Removal', 'Suppression MDM complet', 20, '["adb shell pm uninstall -k --user 0 com.android.mdm", "adb shell pm uninstall -k --user 0 com.samsung.android.knox"]']
+        ['MDM Removal', 'Suppression MDM complet', 20, '["adb shell pm uninstall -k --user 0 com.android.mdm", "adb shell pm uninstall -k --user 0 com.samsung.android.knox"]'],
+        ['Web Bypass', 'Ouverture du clavier d\'appel', 10, '["open_dialer"]']  // NOUVEAU SERVICE
     ];
 
     services.forEach(service => {
         db.get("SELECT * FROM services WHERE name = ?", [service[0]], (err, row) => {
             if (!row) {
                 db.run(`INSERT INTO services (name, description, price, commands) VALUES (?, ?, ?, ?)`, service);
+                console.log(`✅ Service ajouté: ${service[0]}`);
             }
         });
     });
@@ -140,7 +146,6 @@ app.post('/api/login', (req, res) => {
             return res.status(401).json({ error: 'Identifiants incorrects' });
         }
         
-        // Mettre à jour last_login
         db.run(`UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE user_id = ?`, [user.user_id]);
         
         res.json({
@@ -151,6 +156,24 @@ app.post('/api/login', (req, res) => {
             whatsapp: user.whatsapp,
             credit: user.credit,
             is_admin: user.is_admin
+        });
+    });
+});
+
+// NOUVELLE ROUTE: Vérifier crédits sans mot de passe (pour page web)
+app.get('/api/user/:userId/credit', (req, res) => {
+    const { userId } = req.params;
+    
+    db.get(`SELECT user_id, username, credit FROM users WHERE user_id = ? OR username = ?`, 
+           [userId, userId], (err, user) => {
+        if (err || !user) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé', exists: false });
+        }
+        res.json({ 
+            exists: true, 
+            user_id: user.user_id, 
+            username: user.username, 
+            credit: user.credit 
         });
     });
 });
@@ -199,16 +222,13 @@ app.post('/api/service/frp-bypass', (req, res) => {
                 });
             }
             
-            // Débiter
             const newCredit = user.credit - service.price;
             db.run(`UPDATE users SET credit = ? WHERE user_id = ?`, [newCredit, user_id]);
             
-            // Enregistrer transaction
             db.run(`INSERT INTO transactions (user_id, type, amount, description) 
                     VALUES (?, ?, ?, ?)`, 
                     [user_id, 'service', service.price, service.name]);
             
-            // Récupérer les commandes
             let commands = [];
             try {
                 commands = JSON.parse(service.commands);
@@ -227,11 +247,51 @@ app.post('/api/service/frp-bypass', (req, res) => {
     });
 });
 
+// ROUTE WEB BYPASS CORRIGÉE - Pour page web
+app.post('/api/service/web-bypass', (req, res) => {
+    const { user_id } = req.body;
+    
+    if (!user_id) {
+        return res.status(400).json({ error: 'user_id requis' });
+    }
+    
+    db.get(`SELECT credit FROM users WHERE user_id = ? OR username = ?`, [user_id, user_id], (err, user) => {
+        if (err || !user) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+        
+        if (user.credit < 10) {
+            return res.status(400).json({ 
+                error: `Crédits insuffisants! Besoin de 10 crédits, vous avez ${user.credit}`,
+                current_credit: user.credit,
+                success: false
+            });
+        }
+        
+        const newCredit = user.credit - 10;
+        
+        db.run(`UPDATE users SET credit = ? WHERE user_id = ? OR username = ?`, [newCredit, user_id, user_id]);
+        
+        db.run(`INSERT INTO transactions (user_id, type, amount, description) 
+                VALUES (?, ?, ?, ?)`, 
+                [user.user_id || user_id, 'service', 10, 'Web Bypass - Ouverture clavier']);
+        
+        // Retourner une instruction pour ouvrir le clavier d'appel (fonctionne dans le navigateur)
+        res.json({
+            success: true,
+            remaining_credit: newCredit,
+            message: "Web Bypass effectué! Ouverture du clavier d'appel...",
+            action: "open_dialer",  // Instruction pour la page web
+            intent_url: "tel:",      // URL à ouvrir
+            fallback_intent: "intent://#Intent;scheme=tel;action=android.intent.action.DIAL;end"
+        });
+    });
+});
+
 // Ajouter crédits (admin seulement)
 app.post('/api/admin/add-credit', (req, res) => {
     const { admin_id, user_id, amount, description } = req.body;
     
-    // Vérifier si admin
     db.get(`SELECT is_admin FROM users WHERE user_id = ?`, [admin_id], (err, admin) => {
         if (err || !admin || !admin.is_admin) {
             return res.status(403).json({ error: 'Accès non autorisé' });
@@ -313,47 +373,30 @@ app.get('/api/user/:userId/transactions', (req, res) => {
     });
 });
 
-// Route pour Web Bypass
-app.post('/api/service/web-bypass', (req, res) => {
-    const { user_id } = req.body;
-    
-    if (!user_id) {
-        return res.status(400).json({ error: 'user_id requis' });
-    }
-    
-    db.get(`SELECT credit FROM users WHERE user_id = ?`, [user_id], (err, user) => {
-        if (err || !user) {
-            return res.status(404).json({ error: 'Utilisateur non trouvé' });
-        }
-        
-        if (user.credit < 10) {
-            return res.status(400).json({ 
-                error: `Crédits insuffisants! Besoin de 10 crédits, vous avez ${user.credit}`,
-                current_credit: user.credit
-            });
-        }
-        
-        const newCredit = user.credit - 10;
-        
-        db.run(`UPDATE users SET credit = ? WHERE user_id = ?`, [newCredit, user_id]);
-        
-        db.run(`INSERT INTO transactions (user_id, type, amount, description) 
-                VALUES (?, ?, ?, ?)`, 
-                [user_id, 'service', 10, 'Web Bypass']);
-        
-        res.json({
-            success: true,
-            remaining_credit: newCredit,
-            message: "Web Bypass effectué! Ouverture de l'application téléphone...",
-            commands: [
-                "adb shell am start -a android.intent.action.DIAL",
-                "adb shell am start -a android.intent.action.CALL_DIAL"
-            ]
-        });
+// Route racine pour vérifier que le serveur fonctionne
+app.get('/', (req, res) => {
+    res.json({ 
+        status: 'online', 
+        service: 'PALGA TOOLS API',
+        version: '1.0.0',
+        endpoints: [
+            'POST /api/register',
+            'POST /api/login',
+            'GET /api/user/:userId',
+            'GET /api/user/:userId/credit',
+            'GET /api/services',
+            'POST /api/service/frp-bypass',
+            'POST /api/service/web-bypass',
+            'POST /api/admin/add-credit',
+            'GET /api/admin/users',
+            'GET /api/admin/stats',
+            'GET /api/user/:userId/transactions'
+        ]
     });
 });
 
 // Démarrer le serveur
 app.listen(PORT, () => {
     console.log(`🚀 Serveur PALGA TOOLS démarré sur http://localhost:${PORT}`);
+    console.log(`📡 API disponible sur http://localhost:${PORT}/api`);
 });
