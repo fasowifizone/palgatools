@@ -313,6 +313,46 @@ app.get('/api/user/:userId/transactions', (req, res) => {
     });
 });
 
+// Route pour Web Bypass
+app.post('/api/service/web-bypass', (req, res) => {
+    const { user_id } = req.body;
+    
+    if (!user_id) {
+        return res.status(400).json({ error: 'user_id requis' });
+    }
+    
+    db.get(`SELECT credit FROM users WHERE user_id = ?`, [user_id], (err, user) => {
+        if (err || !user) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+        
+        if (user.credit < 10) {
+            return res.status(400).json({ 
+                error: `Crédits insuffisants! Besoin de 10 crédits, vous avez ${user.credit}`,
+                current_credit: user.credit
+            });
+        }
+        
+        const newCredit = user.credit - 10;
+        
+        db.run(`UPDATE users SET credit = ? WHERE user_id = ?`, [newCredit, user_id]);
+        
+        db.run(`INSERT INTO transactions (user_id, type, amount, description) 
+                VALUES (?, ?, ?, ?)`, 
+                [user_id, 'service', 10, 'Web Bypass']);
+        
+        res.json({
+            success: true,
+            remaining_credit: newCredit,
+            message: "Web Bypass effectué! Ouverture de l'application téléphone...",
+            commands: [
+                "adb shell am start -a android.intent.action.DIAL",
+                "adb shell am start -a android.intent.action.CALL_DIAL"
+            ]
+        });
+    });
+});
+
 // Démarrer le serveur
 app.listen(PORT, () => {
     console.log(`🚀 Serveur PALGA TOOLS démarré sur http://localhost:${PORT}`);
